@@ -1,4 +1,6 @@
 import os
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
@@ -15,15 +17,25 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Device:", device)
 
 DATA_ROOT = "./data"
-BATCH_SIZE = 128
-EPOCHS = 30
+BATCH_SIZE_FT = 128
+EPOCHS_FT = 30
 IMAGE_SIZE = 96
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4
+LEARNING_RATE_FT = 1e-3
+WEIGHT_DECAY_FT = 1e-4
 NUM_CLASSES = 10
 
-SCRATCH_CHECKPOINT_PATH = "resnet18_scratch_stl10.pth"
+# SSL checkpoint path
+SSL_CHECKPOINT_PATH = r"Weights\resnet18_ssl_stl10.pth"
+FINETUNED_CHECKPOINT_PATH = r"Weights\resnet18_ssl_finetuned_stl10.pth"
 
+# ============================
+# Evaluation Metrics
+# ============================
+train_losses = []
+train_accs   = []
+val_losses   = []
+val_accs     = []
+val_f1s      = []   # Macro-F1
 
 # ============================
 # Transforms
@@ -50,16 +62,13 @@ test_transform = transforms.Compose([
 # Dataset and DataLoader
 # ============================
 
-def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
-    # Labeled train split
+def get_train_val_test_loaders(batch_size=BATCH_SIZE_FT, val_ratio=0.2):
     full_train_ds = STL10(
         root=DATA_ROOT,
         split="train",
         download=True,
         transform=train_transform,
     )
-
-    # Test split
     test_ds = STL10(
         root=DATA_ROOT,
         split="test",
@@ -101,14 +110,21 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
 
 
 # ============================
-# Model: ResNet-18 (Scratch)
+# Model: ResNet-18 classifier
 # ============================
 
-def get_scratch_model():
-    # weights=None -> completely random initialization
+def get_model(use_ssl_init=True, ssl_ckpt_path=SSL_CHECKPOINT_PATH):
     model = resnet18(weights=None)
 
-    # Change the last layer to 10 classes for STL-10
+    if use_ssl_init and os.path.exists(ssl_ckpt_path):
+        print(f"Loading SSL weights: {ssl_ckpt_path}")
+        state_dict = torch.load(ssl_ckpt_path, map_location=device)
+        # Here, already saved encoder weight in the ssl_pretrain script was loaded.
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("SSL weight not found or not used, continue with random init.")
+
+    # Last layer of the network was changed in order to cover the 10 classes in the dataset of STL-10
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, NUM_CLASSES)
 
@@ -134,6 +150,7 @@ def macro_f1_score(y_true, y_pred, num_classes):
         fn = ((y_pred != c) & (y_true == c)).sum().item()
 
         if tp == 0 and fp == 0 and fn == 0:
+            # If this class does not exist, it can be skipped F1 by counting it as 0.
             f1s.append(0.0)
             continue
 
@@ -222,28 +239,95 @@ def evaluate(model, loader, criterion):
 
 
 # ============================
-# Training (from Scratch)
+# Evaluation Metric
+# ============================
+def save_train_loss():
+    epochs = range(1, len(train_losses) + 1)
+
+    # 1) Train Loss
+    plt.figure()
+    plt.plot(epochs, train_losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Train Loss")
+    plt.title("Fine-tuning - Train Loss vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_train_loss.png", dpi=150)
+    plt.close()
+
+    # 2) Train Accuracy
+    plt.figure()
+    plt.plot(epochs, train_accs)
+    plt.xlabel("Epoch")
+    plt.ylabel("Train Accuracy")
+    plt.title("Fine-tuning - Train Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_train_acc.png", dpi=150)
+    plt.close()
+
+    # 3) Validation Loss
+    plt.figure()
+    plt.plot(epochs, val_losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Val Loss")
+    plt.title("Fine-tuning - Validation Loss vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_loss.png", dpi=150)
+    plt.close()
+
+    # 4) Validation Accuracy
+    plt.figure()
+    plt.plot(epochs, val_accs)
+    plt.xlabel("Epoch")
+    plt.ylabel("Val Accuracy")
+    plt.title("Fine-tuning - Validation Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_acc.png", dpi=150)
+    plt.close()
+
+    # 5) Validation Macro-F1
+    plt.figure()
+    plt.plot(epochs, val_f1s)
+    plt.xlabel("Epoch")
+    plt.ylabel("Val Macro-F1")
+    plt.title("Fine-tuning - Validation Macro-F1 vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_macro_f1.png", dpi=150)
+    plt.close()
+
+# ============================
+# Fine-tuning
 # ============================
 
-def train_scratch():
+def finetune(use_ssl_init=True):
     train_loader, val_loader, test_loader = get_train_val_test_loaders()
 
-    model = get_scratch_model()
+    model = get_model(use_ssl_init=use_ssl_init, ssl_ckpt_path=SSL_CHECKPOINT_PATH)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
+        lr=LEARNING_RATE_FT,
+        weight_decay=WEIGHT_DECAY_FT,
     )
 
     best_val_acc = 0.0
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, EPOCHS_FT + 1):
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer)
         val_loss, val_acc, val_f1 = evaluate(model, val_loader, criterion)
 
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+        val_f1s.append(val_f1)
+
         print(
-            f"[SCRATCH] Epoch [{epoch}/{EPOCHS}] "
+            f"[FT] Epoch [{epoch}/{EPOCHS_FT}] "
             f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
             f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val Macro-F1: {val_f1:.4f}"
         )
@@ -251,19 +335,21 @@ def train_scratch():
         # Track best validation accuracy, save model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            os.makedirs(os.path.dirname(SCRATCH_CHECKPOINT_PATH) or ".", exist_ok=True)
-            torch.save(model.state_dict(), SCRATCH_CHECKPOINT_PATH)
-            print(f"  -> New best scratch model saved (Val Acc = {best_val_acc:.4f})")
+            os.makedirs(os.path.dirname(FINETUNED_CHECKPOINT_PATH) or ".", exist_ok=True)
+            torch.save(model.state_dict(), FINETUNED_CHECKPOINT_PATH)
+            print(f"  -> New best model recorded (Val Acc = {best_val_acc:.4f})")
 
-    # Evaluate the best model on the test set
-    print("The best scratch model is evaluated on the test set...")
-    best_model = get_scratch_model()
-    best_model.load_state_dict(torch.load(SCRATCH_CHECKPOINT_PATH, map_location=device))
+    # Load the best model and evaluate it on the test set
+    print("Best model is evaluated on the test set...")
+    best_model = get_model(use_ssl_init=False)  # Do not load random init (It will be overriden with state_dict)
+    best_model.load_state_dict(torch.load(FINETUNED_CHECKPOINT_PATH, map_location=device))
     best_model.to(device)
 
     test_loss, test_acc, test_f1 = evaluate(best_model, test_loader, criterion)
-    print(f"[SCRATCH TEST] Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, Macro-F1: {test_f1:.4f}")
+    print(f"[TEST] Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, Macro-F1: {test_f1:.4f}")
 
 
 if __name__ == "__main__":
-    train_scratch()
+    # uuse_ssl_init=True -> Uses and fine-tunes pretrained weights with SSL
+    finetune(use_ssl_init=True)
+    save_train_loss()

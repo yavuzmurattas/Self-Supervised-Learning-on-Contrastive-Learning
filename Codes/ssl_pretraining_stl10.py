@@ -1,4 +1,6 @@
 import os
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -22,7 +24,12 @@ TEMPERATURE = 0.5
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
 PROJECTION_DIM = 128
-CHECKPOINT_PATH = "resnet18_ssl_stl10.pth"
+CHECKPOINT_PATH = r"Weights\resnet18_ssl_stl10.pth"
+
+# ============================
+# Evaluation Metric
+# ============================
+ssl_train_losses = []
 
 # ============================
 # Transform like SimCLR
@@ -153,6 +160,23 @@ def get_unlabeled_loader(batch_size=BATCH_SIZE_SSL):
 
 
 # ============================
+# Evaluation Metric
+# ============================
+def save_train_loss():
+    # ---- SSL: Train Loss vs Epoch ----
+    epochs = range(1, len(ssl_train_losses) + 1)
+
+    plt.figure()
+    plt.plot(epochs, ssl_train_losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Train Loss")
+    plt.title("SSL Pretraining - Train Loss vs Epoch (ResNet-18, STL-10)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("./Evaluation_Metrics/PreTrained_Evaluation_Metric/ssl_train_loss.png", dpi=150)
+    plt.close()
+
+# ============================
 # Training
 # ============================
 
@@ -189,6 +213,7 @@ def train_ssl():
             global_step += 1
 
         avg_loss = running_loss / len(train_loader)
+        ssl_train_losses.append(avg_loss)
         print(f"[SSL] Epoch [{epoch}/{EPOCHS_SSL}] - Loss: {avg_loss:.4f}")
 
     # Weights in the model is saved after the tranining was finished.
@@ -199,3 +224,4 @@ def train_ssl():
 
 if __name__ == "__main__":
     train_ssl()
+    save_train_loss()
