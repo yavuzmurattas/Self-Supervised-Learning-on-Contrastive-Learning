@@ -24,15 +24,18 @@ project_root/
 │   ├── resnet18_ssl_finetuned_stl10.pth    # Best fine-tuned weights
 │   └── resnet18_scratch_stl10.pth          # Best trained from scratch weights
 └── (plots regarding evaluation metrics can be saved in the Evaluation_Metrics/ folder)
+```
 
 **Evaluation Metrics (STL-10)**
-
+```text
 All models use the same ResNet-18 backbone and are evaluated on the STL-10 test split.
 
 | Setting                               | SSL Pretrain Epochs | Supervised Epochs | Test Loss | Test Acc | Test Macro-F1 |
 |---------------------------------------|--------------------:|------------------:|----------:|---------:|--------------:|
 | ResNet-18 (scratch, supervised)       | 0                   | 30                | 1.2054    | 0.6418   | 0.6386        |
 | ResNet-18 (SimCLR-style SSL + FT)     | 50                  | 30                | 0.9708    | 0.7416   | 0.7376        |
+```
 
+**Conclusion** 
 These results show that contrastive self-supervised pretraining on the unlabeled split of STL-10, followed by supervised fine-tuning, consistently improves test accuracy (≈0.64 → ≈0.74) and macro-averaged F1-score compared to training the same ResNet-18 architecture from scratch.
 
