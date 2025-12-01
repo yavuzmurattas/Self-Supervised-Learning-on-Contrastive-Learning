@@ -36,6 +36,6 @@ All models use the same ResNet-18 backbone and are evaluated on the STL-10 test 
 | ResNet-18 (SimCLR-style SSL + FT)     | 50                  | 30                | 0.9708    | 0.7416   | 0.7376        |
 ```
 
-**Conclusion** 
+**Conclusion**  
 These results show that contrastive self-supervised pretraining on the unlabeled split of STL-10, followed by supervised fine-tuning, consistently improves test accuracy (≈0.64 → ≈0.74) and macro-averaged F1-score compared to training the same ResNet-18 architecture from scratch.
 
