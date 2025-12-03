@@ -1,7 +1,7 @@
-# Self-Supervised vs From-Scratch on STL-10 (ResNet-18, PyTorch)
+# Self-Supervised vs From-Scratch on STL-10
 
 **Goal**  
-The goal of this project is to compare **contrastive self-supervised pretraining + fine-tuning** against **pure from-scratch supervised training** on the **STL-10** dataset. The same backbone (ResNet-18) is first pretrained in a self-supervised way on unlabeled data and then fine-tuned on labeled data, and this is compared with an identical ResNet-18 trained from random initialization using only labeled data.
+The goal of this project is to compare **contrastive self-supervised pretraining + fine-tuning** against **pure from-scratch supervised training** on the **STL-10** dataset using SimCLR. The same backbone (ResNet-18) is first pretrained in a self-supervised way on unlabeled data and then fine-tuned on labeled data, and this is compared with an identical ResNet-18 trained from random initialization using only labeled data.
 
 **Dataset**  
 - **STL-10** (from `torchvision.datasets.STL10`): 10 classes, 96×96 RGB images  
