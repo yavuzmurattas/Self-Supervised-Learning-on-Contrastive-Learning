@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, random_split
 
 from torchvision import transforms
 from torchvision.datasets import STL10
-from torchvision.models import resnet18
+from torchvision.models import resnet50
 
 # ============================
 # Configurations
@@ -24,12 +24,14 @@ LEARNING_RATE_FT = 1e-3
 WEIGHT_DECAY_FT = 1e-4
 NUM_CLASSES = 10
 
-# SSL checkpoint path
-SSL_CHECKPOINT_PATH = r"Weights\resnet18_ssl_stl10.pth"
-FINETUNED_CHECKPOINT_PATH = r"Weights\resnet18_ssl_finetuned_stl10.pth"
+# SSL checkpoint path (encoder weights from SimCLR pretraining with ResNet-50)
+SSL_CHECKPOINT_PATH = r"Weights\resnet50_ssl_stl10.pth"
+
+# Path to store the best supervised model (linear eval / fine-tuned classifier)
+FINETUNED_CHECKPOINT_PATH = r"Weights\resnet50_ssl_finetuned_stl10.pth"
 
 # ============================
-# Evaluation Metrics
+# Containers for Evaluation Metrics
 # ============================
 train_losses = []
 train_accs   = []
@@ -37,10 +39,12 @@ val_losses   = []
 val_accs     = []
 val_f1s      = []   # Macro-F1
 
+
 # ============================
-# Transforms
+# Transforms for Supervised Training
 # ============================
 
+# Data augmentation for supervised training (fine-tuning / linear eval)
 train_transform = transforms.Compose([
     transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.7, 1.0)),
     transforms.RandomHorizontalFlip(),
@@ -49,6 +53,7 @@ train_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
+# Deterministic transform for validation and test
 test_transform = transforms.Compose([
     transforms.Resize(IMAGE_SIZE),
     transforms.CenterCrop(IMAGE_SIZE),
@@ -59,10 +64,17 @@ test_transform = transforms.Compose([
 
 
 # ============================
-# Dataset and DataLoader
+# Dataset and DataLoaders
 # ============================
 
 def get_train_val_test_loaders(batch_size=BATCH_SIZE_FT, val_ratio=0.2):
+    """
+    Create train / validation / test dataloaders for STL-10.
+
+    The labeled 'train' split (5000 images) is further split into:
+      - train subset
+      - validation subset (val_ratio portion).
+    """
     full_train_ds = STL10(
         root=DATA_ROOT,
         split="train",
@@ -76,7 +88,7 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE_FT, val_ratio=0.2):
         transform=test_transform,
     )
 
-    # Train/val split (For example 4000 train, 1000 val)
+    # e.g. ~4000 train, ~1000 val for STL-10 if val_ratio=0.2
     num_train = len(full_train_ds)
     num_val = int(num_train * val_ratio)
     num_train = num_train - num_val
@@ -110,47 +122,85 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE_FT, val_ratio=0.2):
 
 
 # ============================
-# Model: ResNet-18 classifier
+# Model: ResNet-50 classifier for SimCLR linear evaluation
 # ============================
 
-def get_model(use_ssl_init=True, ssl_ckpt_path=SSL_CHECKPOINT_PATH):
-    model = resnet18(weights=None)
+def get_model(
+    use_ssl_init: bool = True,
+    ssl_ckpt_path: str = SSL_CHECKPOINT_PATH,
+    freeze_backbone: bool = True,
+):
+    """
+    Build a ResNet-50 model for STL-10 classification.
 
+    - If use_ssl_init=True, load encoder weights from SimCLR pretraining
+      (stored in ssl_ckpt_path).
+    - Replace the final fully connected layer with a new Linear(NUM_CLASSES).
+    - If freeze_backbone=True:
+        => this corresponds to the original SimCLR "linear evaluation" protocol:
+           all encoder layers are frozen, only the classifier (fc) is trained.
+      If freeze_backbone=False:
+        => this becomes a full fine-tuning setup (SimCLR initialization).
+    """
+    model = resnet50(weights=None)
+
+    # Optionally initialize from SSL-pretrained encoder weights
     if use_ssl_init and os.path.exists(ssl_ckpt_path):
-        print(f"Loading SSL weights: {ssl_ckpt_path}")
+        print(f"Loading SSL encoder weights from: {ssl_ckpt_path}")
         state_dict = torch.load(ssl_ckpt_path, map_location=device)
-        # Here, already saved encoder weight in the ssl_pretrain script was loaded.
+        # These weights come from the SimCLR encoder (backbone only, fc is Identity).
+        # strict=False to ignore any mismatch in the final classification layer.
         model.load_state_dict(state_dict, strict=False)
     else:
-        print("SSL weight not found or not used, continue with random init.")
+        print("SSL weights not found or not used. Continuing with random initialization.")
 
-    # Last layer of the network was changed in order to cover the 10 classes in the dataset of STL-10
-    in_features = model.fc.in_features
+    # Replace the last fully connected layer to match the number of STL-10 classes
+    in_features = model.fc.in_features  # 2048 for ResNet-50
     model.fc = nn.Linear(in_features, NUM_CLASSES)
+
+    # Original SimCLR linear evaluation protocol freezes the backbone:
+    # only the final linear layer is trained.
+    if freeze_backbone:
+        for name, param in model.named_parameters():
+            # Train only parameters of 'fc' (the classifier head)
+            if not name.startswith("fc."):
+                param.requires_grad = False
 
     return model.to(device)
 
 
 # ============================
-# Accuracy and Macro F1
+# Accuracy and Macro-F1
 # ============================
 
 def compute_accuracy(preds, labels):
+    """
+    Compute classification accuracy.
+
+    preds: tensor of predicted class indices, shape (N,)
+    labels: tensor of ground-truth class indices, shape (N,)
+    """
     correct = (preds == labels).sum().item()
     total = labels.size(0)
     return correct / total
 
 
 def macro_f1_score(y_true, y_pred, num_classes):
-    # y_true and y_pred: 1D tensor (N,)
+    """
+    Compute macro-averaged F1 score across all classes.
+
+    y_true, y_pred: 1D tensors of size N containing class indices.
+    num_classes: total number of classes.
+    """
     f1s = []
     for c in range(num_classes):
         tp = ((y_pred == c) & (y_true == c)).sum().item()
         fp = ((y_pred == c) & (y_true != c)).sum().item()
         fn = ((y_pred != c) & (y_true == c)).sum().item()
 
+        # If a class is completely absent (no positive or negative examples),
+        # we can treat its F1 as zero.
         if tp == 0 and fp == 0 and fn == 0:
-            # If this class does not exist, it can be skipped F1 by counting it as 0.
             f1s.append(0.0)
             continue
 
@@ -170,10 +220,14 @@ def macro_f1_score(y_true, y_pred, num_classes):
 
 
 # ============================
-# Train & Eval Functions
+# Train & Evaluation Functions
 # ============================
 
 def train_one_epoch(model, loader, criterion, optimizer):
+    """
+    Single-epoch supervised training loop.
+    Returns average loss and accuracy over the epoch.
+    """
     model.train()
     running_loss = 0.0
     running_acc = 0.0
@@ -202,6 +256,10 @@ def train_one_epoch(model, loader, criterion, optimizer):
 
 
 def evaluate(model, loader, criterion):
+    """
+    Evaluation loop for validation or test sets.
+    Returns average loss, accuracy and macro-F1 score.
+    """
     model.eval()
     running_loss = 0.0
     running_acc = 0.0
@@ -239,9 +297,20 @@ def evaluate(model, loader, criterion):
 
 
 # ============================
-# Evaluation Metric
+# Plotting Supervised Training Curves
 # ============================
+
 def save_train_loss():
+    """
+    Save fine-tuning / linear-eval curves:
+
+    - Train loss
+    - Train accuracy
+    - Validation loss
+    - Validation accuracy
+    - Validation macro-F1
+    """
+    os.makedirs("./Evaluation_Metrics/FineTuning_Metrics", exist_ok=True)
     epochs = range(1, len(train_losses) + 1)
 
     # 1) Train Loss
@@ -249,7 +318,7 @@ def save_train_loss():
     plt.plot(epochs, train_losses)
     plt.xlabel("Epoch")
     plt.ylabel("Train Loss")
-    plt.title("Fine-tuning - Train Loss vs Epoch (ResNet-18, STL-10)")
+    plt.title("Supervised Training - Train Loss vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_train_loss.png", dpi=150)
@@ -260,7 +329,7 @@ def save_train_loss():
     plt.plot(epochs, train_accs)
     plt.xlabel("Epoch")
     plt.ylabel("Train Accuracy")
-    plt.title("Fine-tuning - Train Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.title("Supervised Training - Train Accuracy vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_train_acc.png", dpi=150)
@@ -271,7 +340,7 @@ def save_train_loss():
     plt.plot(epochs, val_losses)
     plt.xlabel("Epoch")
     plt.ylabel("Val Loss")
-    plt.title("Fine-tuning - Validation Loss vs Epoch (ResNet-18, STL-10)")
+    plt.title("Supervised Training - Validation Loss vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_loss.png", dpi=150)
@@ -282,7 +351,7 @@ def save_train_loss():
     plt.plot(epochs, val_accs)
     plt.xlabel("Epoch")
     plt.ylabel("Val Accuracy")
-    plt.title("Fine-tuning - Validation Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.title("Supervised Training - Validation Accuracy vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_acc.png", dpi=150)
@@ -293,23 +362,44 @@ def save_train_loss():
     plt.plot(epochs, val_f1s)
     plt.xlabel("Epoch")
     plt.ylabel("Val Macro-F1")
-    plt.title("Fine-tuning - Validation Macro-F1 vs Epoch (ResNet-18, STL-10)")
+    plt.title("Supervised Training - Validation Macro-F1 vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("./Evaluation_Metrics/FineTuning_Metrics/ft_val_macro_f1.png", dpi=150)
     plt.close()
 
+
 # ============================
-# Fine-tuning
+# Fine-tuning / Linear Evaluation
 # ============================
 
-def finetune(use_ssl_init=True):
+def finetune(use_ssl_init: bool = True, freeze_backbone: bool = True):
+    """
+    Supervised training after SimCLR:
+
+    - If use_ssl_init=True:
+        Load SimCLR-pretrained encoder weights as initialization.
+    - If freeze_backbone=True (default):
+        This is the original SimCLR "linear evaluation" protocol:
+          * encoder is frozen
+          * only the last linear layer (fc) is trained.
+    - If freeze_backbone=False:
+        This becomes full fine-tuning of the entire network.
+    """
     train_loader, val_loader, test_loader = get_train_val_test_loaders()
 
-    model = get_model(use_ssl_init=use_ssl_init, ssl_ckpt_path=SSL_CHECKPOINT_PATH)
+    model = get_model(
+        use_ssl_init=use_ssl_init,
+        ssl_ckpt_path=SSL_CHECKPOINT_PATH,
+        freeze_backbone=freeze_backbone,
+    )
+
     criterion = nn.CrossEntropyLoss()
+
+    # Optimize only parameters that require gradients.
+    # For linear evaluation, this will be only model.fc parameters.
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=LEARNING_RATE_FT,
         weight_decay=WEIGHT_DECAY_FT,
     )
@@ -332,7 +422,7 @@ def finetune(use_ssl_init=True):
             f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val Macro-F1: {val_f1:.4f}"
         )
 
-        # Track best validation accuracy, save model
+        # Track the best validation accuracy and save the model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             os.makedirs(os.path.dirname(FINETUNED_CHECKPOINT_PATH) or ".", exist_ok=True)
@@ -340,8 +430,12 @@ def finetune(use_ssl_init=True):
             print(f"  -> New best model recorded (Val Acc = {best_val_acc:.4f})")
 
     # Load the best model and evaluate it on the test set
-    print("Best model is evaluated on the test set...")
-    best_model = get_model(use_ssl_init=False)  # Do not load random init (It will be overriden with state_dict)
+    print("Evaluating the best model on the test set...")
+    best_model = get_model(
+        use_ssl_init=False,   # we will load weights from the checkpoint directly
+        ssl_ckpt_path=SSL_CHECKPOINT_PATH,
+        freeze_backbone=freeze_backbone,
+    )
     best_model.load_state_dict(torch.load(FINETUNED_CHECKPOINT_PATH, map_location=device))
     best_model.to(device)
 
@@ -350,6 +444,7 @@ def finetune(use_ssl_init=True):
 
 
 if __name__ == "__main__":
-    # uuse_ssl_init=True -> Uses and fine-tunes pretrained weights with SSL
-    finetune(use_ssl_init=True)
+    # use_ssl_init=True  -> use SimCLR-pretrained encoder as initialization
+    # freeze_backbone=True -> original SimCLR "linear evaluation" setup
+    finetune(use_ssl_init=True, freeze_backbone=True)
     save_train_loss()

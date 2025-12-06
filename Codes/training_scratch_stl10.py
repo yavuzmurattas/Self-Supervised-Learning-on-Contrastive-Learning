@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, random_split
 
 from torchvision import transforms
 from torchvision.datasets import STL10
-from torchvision.models import resnet18
+from torchvision.models import resnet50
 
 # ============================
 # Configurations
@@ -24,10 +24,11 @@ LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_CLASSES = 10
 
-SCRATCH_CHECKPOINT_PATH = r"Weights\resnet18_scratch_stl10.pth"
+# Checkpoint for the "from scratch" supervised model
+SCRATCH_CHECKPOINT_PATH = r"Weights\resnet50_scratch_stl10.pth"
 
 # ============================
-# Evaluation Metrics
+# Evaluation Metrics (history lists)
 # ============================
 train_losses = []
 train_accs   = []
@@ -37,17 +38,35 @@ val_f1s      = []
 
 
 # ============================
-# Transforms
+# Train / Test Transforms
 # ============================
 
+# Color jitter parameters (strong augmentation)
+color_jitter = transforms.ColorJitter(
+    brightness=0.8,
+    contrast=0.8,
+    saturation=0.8,
+    hue=0.2,
+)
+
+# Strong data augmentation for training
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.7, 1.0)),
-    transforms.RandomHorizontalFlip(),
+    transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.08, 1.0)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomApply([color_jitter], p=0.8),
+    transforms.RandomGrayscale(p=0.2),
+    transforms.RandomApply([
+        transforms.GaussianBlur(
+            kernel_size=int(0.1 * IMAGE_SIZE) // 2 * 2 + 1,  # nearest odd integer ~ 10% of image size
+            sigma=(0.1, 2.0),
+        )
+    ], p=0.5),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225]),
 ])
 
+# Lighter, deterministic transform for validation / test
 test_transform = transforms.Compose([
     transforms.Resize(IMAGE_SIZE),
     transforms.CenterCrop(IMAGE_SIZE),
@@ -62,7 +81,12 @@ test_transform = transforms.Compose([
 # ============================
 
 def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
-    # Labeled train split
+    """
+    Create train / validation / test loaders for STL-10.
+    - Train loader uses strong data augmentation.
+    - Validation and test loaders use simple resize + center crop.
+    """
+    # Labeled train split (5k images)
     full_train_ds = STL10(
         root=DATA_ROOT,
         split="train",
@@ -70,7 +94,7 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
         transform=train_transform,
     )
 
-    # Test split
+    # Test split (8k images)
     test_ds = STL10(
         root=DATA_ROOT,
         split="test",
@@ -78,7 +102,7 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
         transform=test_transform,
     )
 
-    # Train/val split (For example 4000 train, 1000 val)
+    # Split train into train/val, e.g. ~4000/1000 for STL-10 with val_ratio=0.2
     num_train = len(full_train_ds)
     num_val = int(num_train * val_ratio)
     num_train = num_train - num_val
@@ -112,14 +136,21 @@ def get_train_val_test_loaders(batch_size=BATCH_SIZE, val_ratio=0.2):
 
 
 # ============================
-# Model: ResNet-18 (Scratch)
+# Model: ResNet-50 (from scratch)
 # ============================
 
 def get_scratch_model():
-    # weights=None -> completely random initialization
-    model = resnet18(weights=None)
+    """
+    Create a ResNet-50 model with random initialization and
+    replace the final FC layer to output NUM_CLASSES logits.
 
-    # Change the last layer to 10 classes for STL-10
+    This is a standard supervised baseline trained from scratch
+    on STL-10, using a ResNet-50 backbone.
+    """
+    # weights=None -> completely random initialization
+    model = resnet50(weights=None)
+
+    # Replace the last FC layer to match STL-10 classes
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, NUM_CLASSES)
 
@@ -131,13 +162,19 @@ def get_scratch_model():
 # ============================
 
 def compute_accuracy(preds, labels):
+    """
+    Compute simple classification accuracy for a batch.
+    """
     correct = (preds == labels).sum().item()
     total = labels.size(0)
     return correct / total
 
 
 def macro_f1_score(y_true, y_pred, num_classes):
-    # y_true and y_pred: 1D tensor (N,)
+    """
+    Compute macro-averaged F1 score over 'num_classes' classes.
+    This evaluates balanced performance across all STL-10 classes.
+    """
     f1s = []
     for c in range(num_classes):
         tp = ((y_pred == c) & (y_true == c)).sum().item()
@@ -168,6 +205,10 @@ def macro_f1_score(y_true, y_pred, num_classes):
 # ============================
 
 def train_one_epoch(model, loader, criterion, optimizer):
+    """
+    One training epoch over 'loader' with cross-entropy loss.
+    Returns epoch_loss and epoch_acc.
+    """
     model.train()
     running_loss = 0.0
     running_acc = 0.0
@@ -196,6 +237,10 @@ def train_one_epoch(model, loader, criterion, optimizer):
 
 
 def evaluate(model, loader, criterion):
+    """
+    Evaluate the model on 'loader' using cross-entropy loss,
+    returning (loss, accuracy, macro_f1).
+    """
     model.eval()
     running_loss = 0.0
     running_acc = 0.0
@@ -233,9 +278,18 @@ def evaluate(model, loader, criterion):
 
 
 # ============================
-# Evaluation Metric
+# Plot & Save Training Curves
 # ============================
+
 def save_train_loss():
+    """
+    Save training / validation curves (loss, accuracy, macro-F1) as PNGs.
+    This is useful to compare 'from scratch' training with
+    self-supervised pretraining + fine-tuning.
+    """
+    out_dir = "./Evaluation_Metrics/Train_Scratch_Metrics"
+    os.makedirs(out_dir, exist_ok=True)
+
     epochs = range(1, len(train_losses) + 1)
 
     # 1) Train Loss
@@ -243,10 +297,10 @@ def save_train_loss():
     plt.plot(epochs, train_losses)
     plt.xlabel("Epoch")
     plt.ylabel("Train Loss")
-    plt.title("Scratch - Train Loss vs Epoch (ResNet-18, STL-10)")
+    plt.title("Scratch - Train Loss vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("./Evaluation_Metrics/Train_Scratch_Metrics/scratch_train_loss.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "scratch_train_loss.png"), dpi=150)
     plt.close()
 
     # 2) Train Accuracy
@@ -254,10 +308,10 @@ def save_train_loss():
     plt.plot(epochs, train_accs)
     plt.xlabel("Epoch")
     plt.ylabel("Train Accuracy")
-    plt.title("Scratch - Train Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.title("Scratch - Train Accuracy vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("./Evaluation_Metrics/Train_Scratch_Metrics/scratch_train_acc.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "scratch_train_acc.png"), dpi=150)
     plt.close()
 
     # 3) Validation Loss
@@ -265,10 +319,10 @@ def save_train_loss():
     plt.plot(epochs, val_losses)
     plt.xlabel("Epoch")
     plt.ylabel("Val Loss")
-    plt.title("Scratch - Validation Loss vs Epoch (ResNet-18, STL-10)")
+    plt.title("Scratch - Validation Loss vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("./Evaluation_Metrics/Train_Scratch_Metrics/scratch_val_loss.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "scratch_val_loss.png"), dpi=150)
     plt.close()
 
     # 4) Validation Accuracy
@@ -276,10 +330,10 @@ def save_train_loss():
     plt.plot(epochs, val_accs)
     plt.xlabel("Epoch")
     plt.ylabel("Val Accuracy")
-    plt.title("Scratch - Validation Accuracy vs Epoch (ResNet-18, STL-10)")
+    plt.title("Scratch - Validation Accuracy vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("./Evaluation_Metrics/Train_Scratch_Metrics/scratch_val_acc.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "scratch_val_acc.png"), dpi=150)
     plt.close()
 
     # 5) Validation Macro-F1
@@ -287,26 +341,38 @@ def save_train_loss():
     plt.plot(epochs, val_f1s)
     plt.xlabel("Epoch")
     plt.ylabel("Val Macro-F1")
-    plt.title("Scratch - Validation Macro-F1 vs Epoch (ResNet-18, STL-10)")
+    plt.title("Scratch - Validation Macro-F1 vs Epoch (ResNet-50, STL-10)")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("./Evaluation_Metrics/Train_Scratch_Metrics/scratch_val_macro_f1.png", dpi=150)
+    plt.savefig(os.path.join(out_dir, "scratch_val_macro_f1.png"), dpi=150)
     plt.close()
 
 
 # ============================
-# Training (from Scratch)
+# Training (from scratch)
 # ============================
 
 def train_scratch():
+    """
+    Train ResNet-50 from scratch on STL-10 with strong data augmentation
+    and a standard Adam + cosine learning rate schedule.
+
+    This serves as the fully supervised baseline in your
+    self-supervised learning project.
+    """
     train_loader, val_loader, test_loader = get_train_val_test_loaders()
 
     model = get_scratch_model()
     criterion = nn.CrossEntropyLoss()
+
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=EPOCHS,
     )
 
     best_val_acc = 0.0
@@ -321,11 +387,16 @@ def train_scratch():
         val_accs.append(val_acc)
         val_f1s.append(val_f1)
 
+        current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"[SCRATCH] Epoch [{epoch}/{EPOCHS}] "
+            f"LR: {current_lr:.6f} | "
             f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
             f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val Macro-F1: {val_f1:.4f}"
         )
+
+        # Step the cosine scheduler AFTER validation
+        scheduler.step()
 
         # Track best validation accuracy, save model
         if val_acc > best_val_acc:
