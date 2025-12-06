@@ -48,8 +48,8 @@ To ensure a fair and rigorous comparison, all experimental setups utilize an ide
 
 | Setting                           | SSL Pretrain Epochs | Supervised Epochs | Test Loss |  Test Acc  | Test Macro-F1 |
 |-----------------------------------| :-----------------: | :---------------: | :-------: | :--------: | :-----------: |
-| ResNet-50 (Scratch, Strong Aug.)  |         0           |         30        |   1.3446  |   ~0.49    |    0.4871     |
-| ResNet-50 (SimCLR + Linear Eval)  |         50          |         30        |   0.9222  |   ~0.66    |    0.6593     |
+| ResNet-50 (Scratch, Strong Aug.)  |         0           |         30        |  1.3446   |   0.4983   |    0.4871     |
+| ResNet-50 (SimCLR + Linear Eval)  |         50          |         30        |  0.9222   |   0.6634   |    0.6593     |
 ```
 
 ## **Conclusion**
