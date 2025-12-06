@@ -43,8 +43,8 @@ project_root/
 ```
 
 **Evaluation Metrics (STL-10)**
-```text
 To ensure a fair and rigorous comparison, all experimental setups utilize an identical ResNet-50 backbone architecture. Performance metrics are reported on the official STL-10 test set (8,000 images).
+```text
 
 | Setting                           | SSL Pretrain Epochs | Supervised Epochs | Test Loss |  Test Acc  | Test Macro-F1 |
 |-----------------------------------| :-----------------: | :---------------: | :-------: | :--------: | :-----------: |
