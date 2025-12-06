@@ -42,7 +42,7 @@ project_root/
     └── Train_Scratch_Metrics/
 ```
 
-**Evaluation Metrics (STL-10)**
+## **Evaluation Metrics (STL-10)**
 To ensure a fair and rigorous comparison, all experimental setups utilize an identical ResNet-50 backbone architecture. Performance metrics are reported on the official STL-10 test set (8,000 images).
 ```text
 
