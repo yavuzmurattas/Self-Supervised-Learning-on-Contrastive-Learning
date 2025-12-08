@@ -51,16 +51,27 @@ color_jitter = transforms.ColorJitter(
 
 # Strong data augmentation for training
 train_transform = transforms.Compose([
+    # 1. Random Crop (SimCLR scale)
     transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.08, 1.0)),
+
+    # 2. Horizontal Flip (Default p=0.5)
     transforms.RandomHorizontalFlip(p=0.5),
+
+    # 3. Color Jitter (p=0.8)
     transforms.RandomApply([color_jitter], p=0.8),
+
+    # 4. Grayscale (p=0.2)
     transforms.RandomGrayscale(p=0.2),
+
+    # 5. Gaussian Blur (p=0.5)
     transforms.RandomApply([
         transforms.GaussianBlur(
             kernel_size=int(0.1 * IMAGE_SIZE) // 2 * 2 + 1,  # nearest odd integer ~ 10% of image size
             sigma=(0.1, 2.0),
         )
     ], p=0.5),
+
+    # 6. ToTensor & Normalize
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225]),

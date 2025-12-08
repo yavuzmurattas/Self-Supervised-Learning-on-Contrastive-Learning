@@ -71,15 +71,28 @@ class SimCLRTransform:
         )
 
         self.base_transform = transforms.Compose([
-            # Random resized crop with small minimum scale (0.08) as in SimCLR
+            # 1. Random Crop (SimCLR scale)
             transforms.RandomResizedCrop(image_size, scale=(0.08, 1.0)),
+            
+            # 2. Horizontal Flip (Default p=0.5)
             transforms.RandomHorizontalFlip(),
+            
+            # 3. Color Jitter (p=0.8)
             transforms.RandomApply([color_jitter], p=0.8),
+            
+            # 4. Grayscale (p=0.2)
             transforms.RandomGrayscale(p=0.2),
-            # Gaussian blur is a key augmentation in SimCLR
-            transforms.GaussianBlur(kernel_size=9, sigma=(0.1, 2.0)),
+            
+            # 5. Gaussian Blur (p=0.5)
+            transforms.RandomApply([
+                transforms.GaussianBlur(
+                    kernel_size=int(0.1 * IMAGE_SIZE) // 2 * 2 + 1,  # nearest odd integer ~ 10% of image size
+                    sigma=(0.1, 2.0),
+                )
+            ], p=0.5),
+            
+            # 6. ToTensor & Normalize
             transforms.ToTensor(),
-            # Standard ImageNet normalization for ResNet
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
         ])
