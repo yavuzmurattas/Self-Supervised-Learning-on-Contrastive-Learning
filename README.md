@@ -20,7 +20,7 @@ This project follows the original SimCLR framework (*Chen et al.*) closely:
 - **Projection Head:** 2-layer MLP (Hidden: 2048, Output: 128).
 - **Loss Function:** NT-Xent Loss (Temperature $\tau=0.5$).
 - **Optimizer:** SGD + Cosine Annealing Learning Rate Scheduler.
-- **Augmentations:** Random Resized Crop, Horizontal Flip, **Color Jitter (Strong)**, **Gaussian Blur**, Random Grayscale.
+- **Augmentations:** Random Resized Crop, Horizontal Flip, **Color Jitter (Strong)**, **Gaussian Blur (p=0.5)**, Random Grayscale.
 
 ## **Folder Hierarchy**
 ```text
@@ -48,15 +48,15 @@ To ensure a fair and rigorous comparison, all experimental setups utilize an ide
 
 | Setting                           | SSL Pretrain Epochs | Supervised Epochs | Test Loss |  Test Acc  | Test Macro-F1 |
 |-----------------------------------| :-----------------: | :---------------: | :-------: | :--------: | :-----------: |
-| ResNet-50 (Scratch, Strong Aug.)  |         0           |         30        |  1.3446   |   0.4983   |    0.4871     |
-| ResNet-50 (SimCLR + Linear Eval)  |         50          |         30        |  0.9222   |   0.6634   |    0.6593     |
+| ResNet-50 (Scratch, Strong Aug.)  |         0           |         30        |  1.2360   |   53.73%   |    0.5271     |
+| ResNet-50 (SimCLR + Linear Eval)  |         50          |         30        |  0.7641   |   72.25%   |    0.7219     |
 ```
 
 ## **Conclusion**
 
-This project demonstrates the substantial impact of Self-Supervised Learning (SimCLR) in scenarios with limited labeled data. By pretraining a **ResNet-50** encoder on 100,000 unlabeled STL-10 images, we achieved a Test Accuracy of **66.34%**, significantly outperforming the supervised baseline (trained from scratch with strong augmentations), which only reached **49.83%**.
+This project demonstrates the substantial impact of Self-Supervised Learning (SimCLR) in scenarios with limited labeled data. By pretraining a **ResNet-50** encoder on 100,000 unlabeled STL-10 images, we achieved a Test Accuracy of **72.25%**, significantly outperforming the supervised baseline (trained from scratch with strong augmentations), which only reached **53.73%**.
 
 **Key Findings:**
-1.  **Label Efficiency:** The SimCLR approach yielded a **+16.5% absolute improvement** in accuracy compared to the supervised baseline, proving that the model successfully leveraged unlabeled data to learn robust visual representations.
+1.  **Label Efficiency:** The SimCLR approach yielded a **+18.52% absolute improvement** in accuracy compared to the supervised baseline, proving that the model successfully leveraged unlabeled data to learn robust visual representations.
 2.  **Rapid Convergence:** A remarkable observation is that the SimCLR model surpassed the final performance of the scratch model (Epoch 30) within the very **first epoch** of linear evaluation (~59% vs ~47%). This indicates that the pretrained features were already semantically separable before any supervised fine-tuning.
-3.  **Generalization:** The close gap between Training and Validation metrics in the Linear Evaluation phase suggests that SSL learned features that generalize well, avoiding the overfitting issues observed in the scratch training.
+3.  **Generalization:** The close gap between Training and Validation metrics in the Linear Evaluation phase suggests that SSL learned features that generalize well, significantly minimizing the overfitting gap often observed in deep neural networks trained on limited data.
